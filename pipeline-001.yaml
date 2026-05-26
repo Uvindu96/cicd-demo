@@ -1,0 +1,46 @@
+# azure-pipelines.yml
+
+trigger:
+  - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  IMAGE: 'ghcr.io/miranlfk/git-actions-demo/calculator:latest'
+  CONTAINER_NAME: 'calculator'
+
+stages:
+  - stage: Deploy
+    displayName: 'Deploy Calculator Container'
+    jobs:
+      - job: DeployJob
+        displayName: 'Pull and Run Docker Image'
+        steps:
+
+          # Optional: Login to GHCR if the package is private
+          - script: |
+              echo "$(GHCR_PAT)" | docker login ghcr.io -u $(GHCR_USERNAME) --password-stdin
+            displayName: 'Login to GitHub Container Registry'
+            condition: ne(variables['GHCR_PAT'], '')
+
+          - script: |
+              docker pull $(IMAGE)
+            displayName: 'Pull Docker Image'
+
+          - script: |
+              docker stop $(CONTAINER_NAME) || true
+              docker rm $(CONTAINER_NAME) || true
+            displayName: 'Remove Old Container (if exists)'
+
+          - script: |
+              docker run -d \
+                --name $(CONTAINER_NAME) \
+                --restart unless-stopped \
+                -p 8080:8080 \
+                $(IMAGE)
+            displayName: 'Run Container'
+
+          - script: |
+              docker ps --filter "name=$(CONTAINER_NAME)"
+            displayName: 'Verify Container is Running'
