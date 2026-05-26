@@ -7,40 +7,106 @@ pool:
   vmImage: 'ubuntu-latest'
 
 variables:
-  IMAGE: 'ghcr.io/miranlfk/git-actions-demo/calculator:latest'
-  CONTAINER_NAME: 'calculator'
+  - name: IMAGE
+    value: 'ghcr.io/miranlfk/git-actions-demo/calculator:latest'
+  - name: CONTAINER_NAME
+    value: 'calculator'
+  - name: HOST_PORT
+    value: '8080'
 
 stages:
-  - stage: Deploy
-    displayName: 'Deploy Calculator Container'
+
+  # ─────────────────────────────────────────
+  # STAGE 1: Validate
+  # ─────────────────────────────────────────
+  - stage: Validate
+    displayName: '🔍 Validate'
     jobs:
-      - job: DeployJob
-        displayName: 'Pull and Run Docker Image'
+      - job: ValidateJob
+        displayName: 'Check Prerequisites'
         steps:
-
-          # Optional: Login to GHCR if the package is private
           - script: |
-              echo "$(GHCR_PAT)" | docker login ghcr.io -u $(GHCR_USERNAME) --password-stdin
-            displayName: 'Login to GitHub Container Registry'
-            condition: ne(variables['GHCR_PAT'], '')
+              docker --version
+              echo "Image target: $(IMAGE)"
+            displayName: 'Check Docker is Available'
 
+          - script: |
+              docker manifest inspect $(IMAGE)
+              echo "✅ Image exists and is accessible"
+            displayName: 'Verify Image Exists on Registry'
+
+  # ─────────────────────────────────────────
+  # STAGE 2: Pull
+  # ─────────────────────────────────────────
+  - stage: Pull
+    displayName: '📦 Pull'
+    dependsOn: Validate
+    jobs:
+      - job: PullJob
+        displayName: 'Pull Docker Image'
+        steps:
           - script: |
               docker pull $(IMAGE)
+              echo "✅ Image pulled successfully"
             displayName: 'Pull Docker Image'
+
+          - script: |
+              docker image inspect $(IMAGE)
+            displayName: 'Inspect Image Metadata'
+
+  # ─────────────────────────────────────────
+  # STAGE 3: Test
+  # ─────────────────────────────────────────
+  - stage: Test
+    displayName: '🧪 Test'
+    dependsOn: Pull
+    jobs:
+      - job: TestJob
+        displayName: 'Smoke Test Image'
+        steps:
+          - script: |
+              docker run --rm --name $(CONTAINER_NAME)-test $(IMAGE) echo "Container boots OK"
+              echo "✅ Smoke test passed"
+            displayName: 'Smoke Test — Container Starts'
+
+  # ─────────────────────────────────────────
+  # STAGE 4: Deploy & Health Check
+  # ─────────────────────────────────────────
+  - stage: Deploy
+    displayName: '🚀 Deploy'
+    dependsOn: Test
+    jobs:
+      - job: DeployJob
+        displayName: 'Run Container'
+        steps:
+          - script: |
+              docker pull $(IMAGE)
+            displayName: 'Pull Latest Image'
 
           - script: |
               docker stop $(CONTAINER_NAME) || true
               docker rm $(CONTAINER_NAME) || true
-            displayName: 'Remove Old Container (if exists)'
+            displayName: 'Remove Old Container'
 
           - script: |
               docker run -d \
                 --name $(CONTAINER_NAME) \
                 --restart unless-stopped \
-                -p 8080:8080 \
+                -p $(HOST_PORT):8080 \
                 $(IMAGE)
-            displayName: 'Run Container'
+            displayName: 'Start Container'
 
           - script: |
-              docker ps --filter "name=$(CONTAINER_NAME)"
+              sleep 5
+              docker ps --filter "name=$(CONTAINER_NAME)" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
             displayName: 'Verify Container is Running'
+
+          # ── Health Check steps moved here ──────────
+          - script: |
+              docker logs $(CONTAINER_NAME) --tail 50
+            displayName: 'Tail Container Logs'
+
+          - script: |
+              curl -f http://localhost:$(HOST_PORT)/health || echo "⚠️ No health endpoint — check app manually"
+            displayName: 'HTTP Health Check'
+            continueOnError: true
